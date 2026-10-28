@@ -1,12 +1,12 @@
-﻿const Version = '2026-10-08 22:23:27';
+const Version = '2026-10-08 22:23:27';
 let config_JSON, 缓存SOCKS5白名单 = null, 调试日志打印 = false;
 let SOCKS5白名单 = ['*tapecontent.net', '*cloudatacdn.com', '*loadshare.org', '*cdn-centaurus.com', 'scholar.google.com'];
-const Pages静态页面 = 'https://edt-pages.github.io', EDT_版本号 = Number(String(Version).replace(/\D+/g, ''));
+const Pages静态页面 = 'https://joendar88.github.io/EDT-Pages.github.io', EDT_版本号 = Number(String(Version).replace(/\D+/g, ''));
 ///////////////////////////////////////////////////////全局常量和工具函数///////////////////////////////////////////////
 const WS早期数据最大字节 = 8 * 1024, WS早期数据最大头长度 = Math.ceil(WS早期数据最大字节 * 4 / 3) + 4;
 const 上行合包目标字节 = 20 * 1024, 上行队列最大字节 = 16 * 1024 * 1024, 上行队列最大条目 = 4096;
 const 下行Grain包字节 = 32 * 1024, 下行Grain尾部阈值 = 512, 下行Grain低水位字节 = Math.max(4096, 下行Grain尾部阈值 * 12), 下行Grain最大等待轮次 = 4;
-let TCP并发拨号数 = 2, 反代并发拨号数 = 1, 预加载竞速拨号 = false;
+let TCP并发拨号数 = 2, 反代并发拨号数 = 1, 预加载竞速拨号 = false, 开启调试日志 = false;
 ///////////////////////////////////////////////////////查杀特征码///////////////////////////////////////////////
 const 特征码字典 = [
 	(Proxy.name + "IP").toUpperCase(),
@@ -36,8 +36,8 @@ export default {
 		const hosts = env.HOST ? (await 整理成数组(env.HOST)).map(h => h.toLowerCase().replace(/^https?:\/\//, '').split('/')[0].split(':')[0]) : [url.hostname];
 		const host = hosts[0];
 		const 访问路径 = url.pathname.slice(1).toLowerCase();
-		调试日志打印 = ['1', 'true'].includes(env.DEBUG) || 调试日志打印;
-		预加载竞速拨号 = ['1', 'true'].includes(env.PRELOAD_RACE_DIAL) || 预加载竞速拨号;
+		调试日志打印 = false;
+		预加载竞速拨号 = false;
 		反代并发拨号数 = Math.max(1, Number(env.PROXY_CONCURRENT_DIAL) || 反代并发拨号数);
 		TCP并发拨号数 = Math.max(1, Number(env.TCP_CONCURRENT_DIAL) || TCP并发拨号数);
 		if (!env.TCP_CONCURRENT_DIAL && TCP并发拨号数 !== 1 && 识别运营商(request) === 'cmcc') TCP并发拨号数 = 1;
@@ -68,17 +68,19 @@ export default {
 			}
 		} else if (管理员密码 && upgradeHeader === 'websocket') {// WebSocket代理
 			const 反代上下文 = await 反代参数获取(url, userID, 默认反代IP, 默认反代兜底);
+			const config_JSON = await 读取config_JSON(env, host, userID, UA);
 			log(`[WebSocket] 命中请求: ${url.pathname}${url.search}`);
-			return await 处理WS请求(request, userID, url, 反代上下文);
+			return await 处理WS请求(request, userID, url, 反代上下文, config_JSON);
 		} else if (管理员密码 && !访问路径.startsWith('admin/') && 访问路径 !== 'login' && request.method === 'POST') {// gRPC/叉HTTP代理
 			const 反代上下文 = await 反代参数获取(url, userID, 默认反代IP, 默认反代兜底);
+			const config_JSON = await 读取config_JSON(env, host, userID, UA);
 			const 命中叉HTTP特征 = !!request.headers.get(本机标识头) || !!url.searchParams.get(本机标识键);
 			if (!命中叉HTTP特征 && contentType.startsWith('application/grpc')) {
 				log(`[gRPC] 命中请求: ${url.pathname}${url.search}`);
-				return await 处理gRPC请求(request, userID, 反代上下文);
+				return await 处理gRPC请求(request, userID, 反代上下文, config_JSON);
 			}
 			log(`[叉HTTP] 命中请求: ${url.pathname}${url.search}`);
-			return await 处理叉HTTP请求(request, userID, 反代上下文);
+			return await 处理叉HTTP请求(request, userID, 反代上下文, config_JSON);
 		} else {
 			if (url.protocol === 'http:') return Response.redirect(url.href.replace(`http://${url.hostname}`, `https://${url.hostname}`), 301);
 			if (!管理员密码) return fetch(Pages静态页面 + '/noADMIN').then(r => { const headers = new Headers(r.headers); headers.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate'); headers.set('Pragma', 'no-cache'); headers.set('Expires', '0'); return new Response(r.body, { status: 404, statusText: r.statusText, headers }) });
@@ -302,7 +304,7 @@ export default {
 					响应.headers.set('Set-Cookie', 'auth=; Path=/; Max-Age=0; HttpOnly');
 					return 响应;
 				} else if (访问路径 === 'sub') {//处理订阅请求
-					const 订阅TOKEN = await MD5MD5(host + userID), 作为优选订阅生成器 = ['1', 'true'].includes(env.BEST_SUB) && url.searchParams.get('host') === 'example.com' && url.searchParams.get('uuid') === '00000000-0000-4000-8000-000000000000' && UA.toLowerCase().includes('tunnel (https://github.com/' + 特征码字典[1] + '/edge');
+					const 订阅TOKEN = await MD5MD5(host + userID), 作为优选订阅生成器 = false;
 					const 请求TOKEN = url.searchParams.get('token');
 					const 用户客户端请求订阅 = 请求TOKEN === 订阅TOKEN;
 					const 当前日序号 = Math.floor(Date.now() / 86400000);
@@ -593,12 +595,12 @@ function 生成叉HTTPPadding串(长度) {
 	return 结果;
 }
 
-async function 处理叉HTTP请求(request, yourUUID, 反代上下文 = {}) {
+async function 处理叉HTTP请求(request, yourUUID, 反代上下文 = {}, config_JSON = {}) {
 	if (!request.body) return new Response('Bad Request', { status: 400 });
 	const [本机标识头, 本机标识键] = 获取本机标识(yourUUID);
 	if (!校验叉HTTPPadding(request, 本机标识头, 本机标识键)) return new Response('Bad Request', { status: 400 });
 	const reader = request.body.getReader();
-	const 首包 = await 读取叉HTTP首包(reader, yourUUID);
+	const 首包 = await 读取叉HTTP首包(reader, yourUUID, config_JSON);
 	if (!首包) {
 		try { reader.releaseLock() } catch (e) { }
 		return new Response('Invalid request', { status: 400 });
@@ -816,7 +818,7 @@ function 开始TCP连接世代(remoteConnWrapper) {
 	return { generation, downlinkDrain };
 }
 
-async function 读取叉HTTP首包(reader, token) {
+async function 读取叉HTTP首包(reader, token, config_JSON = {}) {
 	const decoder = 魏烈思文本解码器;
 
 	const 尝试解析魏烈思首包 = (data) => {
@@ -866,7 +868,7 @@ async function 读取叉HTTP首包(reader, token) {
 		return {
 			状态: 'ok',
 			结果: {
-				协议: 'vl' + 'ess',
+				协议: config_JSON.协议类型 === 'anytls' ? 'anytls' : 'vl' + 'ess',
 				hostname,
 				port,
 				isUDP: cmd === 2,
@@ -977,7 +979,7 @@ async function 读取叉HTTP首包(reader, token) {
 	return null;
 }
 ///////////////////////////////////////////////////////////////////////gRPC传输数据///////////////////////////////////////////////
-async function 处理gRPC请求(request, yourUUID, 反代上下文 = {}) {
+async function 处理gRPC请求(request, yourUUID, 反代上下文 = {}, config_JSON = {}) {
 	if (!request.body) return new Response('Bad Request', { status: 400 });
 	const reader = request.body.getReader();
 	const remoteConnWrapper = { socket: null, connectingPromise: null, retryConnect: null, downlinkDrain: Promise.resolve() };
@@ -1175,7 +1177,15 @@ async function 处理gRPC请求(request, yourUUID, 反代上下文 = {}) {
 							if (!(await 写入远端(payload))) throw new Error('Remote socket is not ready');
 						} else {
 							const 首包bytes = 数据转Uint8Array(payload);
-							if (判断是否是木马 === null) 判断是否是木马 = 首包bytes.byteLength >= 58 && 首包bytes[56] === 0x0d && 首包bytes[57] === 0x0a;
+							// 优先使用配置指定的协议类型
+							let 协议类型 = null;
+							if (config_JSON.协议类型 === 'anytls' || config_JSON.协议类型 === 'vless') {
+								协议类型 = 'anytls'; // AnyTLS 使用与 VLESS 相同的线路格式
+							} else if (判断是否是木马 === null) {
+								判断是否是木马 = 首包bytes.byteLength >= 58 && 首包bytes[56] === 0x0d && 首包bytes[57] === 0x0a;
+								协议类型 = 判断是否是木马 ? '木马' : '魏烈思';
+							}
+							
 							if (判断是否是木马) {
 								const 解析结果 = 解析木马请求(首包bytes, yourUUID);
 								if (解析结果?.hasError) throw new Error(解析结果.message || 'Invalid trojan request');
@@ -1197,9 +1207,9 @@ async function 处理gRPC请求(request, yourUUID, 反代上下文 = {}) {
 							} else {
 								判断是否是木马 = false;
 								const 解析结果 = 解析魏烈思请求(首包bytes, yourUUID);
-								if (解析结果?.hasError) throw new Error(解析结果.message || 'Invalid 魏烈思 request');
+								if (解析结果?.hasError) throw new Error(解析结果.message || 'Invalid request');
 								const { port, hostname, version, isUDP, rawClientData } = 解析结果;
-								log(`[gRPC] 魏烈思首包: ${hostname}:${port} | UDP: ${isUDP ? '是' : '否'}`);
+								log(`[gRPC] ${协议类型 || '魏烈思'}首包: ${hostname}:${port} | UDP: ${isUDP ? '是' : '否'}`);
 								const respHeader = new Uint8Array([version, 0]);
 								if (isSpeedTestSite(hostname) && 反代上下文.代理类型 === null) {
 									grpcBridge.send(构造本地204响应(respHeader));
@@ -1288,7 +1298,7 @@ function 解码WS早期数据(header, token) {
 }
 
 ///////////////////////////////////////////////////////////////////////WS传输数据///////////////////////////////////////////////
-async function 处理WS请求(request, yourUUID, url, 反代上下文 = {}) {
+async function 处理WS请求(request, yourUUID, url, 反代上下文 = {}, config_JSON = {}) {
 	const WS套接字对 = new WebSocketPair();
 	const [clientSock, serverSock] = Object.values(WS套接字对);
 	try { (/** @type {any} */ (serverSock)).accept({ allowHalfOpen: true }) }
@@ -1650,8 +1660,12 @@ async function 处理WS请求(request, yourUUID, url, 反代上下文 = {}) {
 		if (await 写入远端(chunk)) return;
 
 		if (判断协议类型 === null) {
-			if (url.searchParams.get('enc')) 判断协议类型 = 'ss';
-			else {
+			// 优先使用配置指定的协议类型
+			if (config_JSON.协议类型 === 'anytls') {
+				判断协议类型 = 'anytls';
+			} else if (config_JSON.协议类型 === 'ss' || url.searchParams.get('enc')) {
+				判断协议类型 = 'ss';
+			} else {
 				当前块字节 = 当前块字节 || 数据转Uint8Array(chunk);
 				const bytes = 当前块字节;
 				判断协议类型 = bytes.byteLength >= 58 && bytes[56] === 0x0d && bytes[57] === 0x0a ? '木马' : '魏烈思';
@@ -1683,11 +1697,12 @@ async function 处理WS请求(request, yourUUID, url, 反代上下文 = {}) {
 			}
 			await forwardataTCP(hostname, port, rawClientData, serverSock, null, remoteConnWrapper, yourUUID, request, 反代上下文, true, 当前块字节 || 数据转Uint8Array(chunk));
 		} else {
+			// AnyTLS 使用与 VLESS 相同的线路格式
 			判断是否是木马 = false;
 			当前块字节 = 当前块字节 || 数据转Uint8Array(chunk);
 			const bytes = 当前块字节;
 			const 解析结果 = 解析魏烈思请求(bytes, yourUUID);
-			if (解析结果?.hasError) throw new Error(解析结果.message || 'Invalid 魏烈思 request');
+			if (解析结果?.hasError) throw new Error(解析结果.message || 'Invalid request');
 			const { port, hostname, version, isUDP, rawClientData } = 解析结果;
 			const respHeader = new Uint8Array([version, 0]);
 			if (isSpeedTestSite(hostname) && 反代上下文.代理类型 === null) {
@@ -4815,7 +4830,7 @@ function 获取传输路径参数值(配置 = {}, 节点路径 = '/', 作为优�
 }
 
 function log(...args) {
-	if (调试日志打印) console.log(...args);
+	if (开启调试日志) console.log(...args);
 }
 
 function Clash订阅配置文件热补丁(Clash_原始订阅内容, config_JSON = {}) {
@@ -5712,6 +5727,14 @@ async function 读取config_JSON(env, hostname, userID, UA = "Mozilla/5.0", 重�
 		config_JSON = 默认配置JSON;
 	}
 
+	// 归一化协议类型字段：兼容面板可能提交的英文键名
+	if (!config_JSON.协议类型) {
+		const 可能的协议字段 = config_JSON.protocolType || config_JSON.protocol || config_JSON.protocol_type || config_JSON.ProtocolType || config_JSON.Protocol;
+		if (可能的协议字段) {
+			config_JSON.协议类型 = 可能的协议字段;
+		}
+	}
+
 	if (!config_JSON.订阅转换配置.SUBLIST) config_JSON.订阅转换配置.SUBLIST = false;
 	if (!config_JSON.订阅转换配置.UDP) config_JSON.订阅转换配置.UDP = false;
 	if (!config_JSON.订阅转换配置.XUDP) config_JSON.订阅转换配置.XUDP = false;
@@ -5793,6 +5816,8 @@ async function 读取config_JSON(env, hostname, userID, UA = "Mozilla/5.0", 重�
 	const 传输路径参数值 = 获取传输路径参数值(config_JSON, config_JSON.完整节点路径);
 	config_JSON.LINK = config_JSON.协议类型 === 'ss'
 		? `${config_JSON.协议类型}://${btoa(config_JSON.SS.加密方式 + ':' + userID)}@${host}:${config_JSON.SS.TLS ? '443' : '80'}?plugin=v2${encodeURIComponent(`ray-plugin;mode=websocket;host=${host};path=${((config_JSON.完整节点路径.includes('?') ? config_JSON.完整节点路径.replace('?', '?enc=' + config_JSON.SS.加密方式 + '&') : (config_JSON.完整节点路径 + '?enc=' + config_JSON.SS.加密方式)) + (config_JSON.SS.TLS ? ';tls' : ''))};mux=0`) + ECHLINK参数}#${encodeURIComponent(config_JSON.优选订阅生成.SUBNAME)}`
+		: config_JSON.协议类型 === 'anytls'
+		? `anytls://${userID}@${host}:443?security=tls&type=network&fp=${config_JSON.Fingerprint}&sni=${host}&path=${config_JSON.完整节点路径}${TLS分片参数}&encryption=none#${encodeURIComponent(config_JSON.优选订阅生成.SUBNAME)}`
 		: `${config_JSON.协议类型}://${userID}@${host}:443?security=tls&type=${传输协议 + ECHLINK参数}&${域名字段名}=${host}&fp=${config_JSON.Fingerprint}&sni=${host}&${路径字段名}=${encodeURIComponent(传输路径参数值) + TLS分片参数}&encryption=none#${encodeURIComponent(config_JSON.优选订阅生成.SUBNAME)}`;
 	config_JSON.优选订阅生成.TOKEN = await MD5MD5(hostname + userID);
 
